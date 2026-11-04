@@ -1,7 +1,7 @@
 <?php
 
 return [
-    'wikipedia' => ['user_agent' => env('WIKIPEDIA_USER_AGENT', 'OceanQuiz/1.0 (educational project)')],
+    'wikipedia' => ['user_agent' => env('WIKIPEDIA_USER_AGENT', 'AbyssalMind/1.0 (https://github.com/luanpnm65/oceanquiz1)')],
     'gemini' => ['key' => env('GEMINI_API_KEY'), 'model' => env('GEMINI_MODEL', 'gemini-3.5-flash-lite')],
 
     /*

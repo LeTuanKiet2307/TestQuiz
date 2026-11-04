@@ -2,27 +2,64 @@
 
 namespace App\Services;
 
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\HttpClientException;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use RuntimeException;
+use Throwable;
 
 class WikipediaService
 {
+    private const API_URL = 'https://vi.wikipedia.org/w/api.php';
+
     private function query(array $parameters): array
     {
         try {
             $response = Http::acceptJson()->withUserAgent(config('services.wikipedia.user_agent'))
-                ->connectTimeout(8)->timeout(20)->get('https://vi.wikipedia.org/w/api.php', $parameters + [
+                ->connectTimeout(6)->timeout(20)
+                ->retry(3, 300, function (Throwable $e) {
+                    if ($e instanceof ConnectionException) {
+                        return true;
+                    }
+
+                    return $e instanceof RequestException
+                        && in_array($e->response?->status(), [429, 500, 502, 503, 504], true);
+                }, throw: false)
+                ->get(self::API_URL, $parameters + [
                     'action' => 'query', 'format' => 'json', 'formatversion' => 2, 'maxlag' => 5,
-                ])->throw()->json();
+                ]);
         } catch (HttpClientException $e) {
+            Log::warning('Không gọi được Wikipedia API', ['error' => $e->getMessage()]);
+
             throw new RuntimeException('Chưa kết nối được Wikipedia. Hãy thử lại hoặc nhập bài thủ công.');
         }
-        if (! is_array($response) || isset($response['error'])) {
-            throw new RuntimeException('Wikipedia chưa trả về dữ liệu hợp lệ. Vui lòng thử lại sau.');
+
+        if ($response->failed()) {
+            Log::warning('Wikipedia API trả về HTTP lỗi', ['status' => $response->status(), 'body' => mb_substr($response->body(), 0, 300)]);
+
+            throw new RuntimeException($response->status() === 429
+                ? 'Wikipedia đang giới hạn truy cập, vui lòng thử lại sau ít phút.'
+                : 'Chưa kết nối được Wikipedia (HTTP '.$response->status().'). Hãy thử lại hoặc nhập bài thủ công.');
         }
 
-        return $response;
+        $data = $response->json();
+        if (! is_array($data)) {
+            Log::warning('Wikipedia API trả về dữ liệu không phải JSON', ['body' => mb_substr($response->body(), 0, 300)]);
+
+            throw new RuntimeException('Wikipedia chưa trả về dữ liệu hợp lệ. Vui lòng thử lại sau.');
+        }
+        if (isset($data['error'])) {
+            $code = $data['error']['code'] ?? 'unknown';
+            Log::warning('Wikipedia API báo lỗi', ['code' => $code, 'info' => $data['error']['info'] ?? null]);
+
+            throw new RuntimeException($code === 'maxlag'
+                ? 'Wikipedia đang quá tải, vui lòng thử lại sau vài giây.'
+                : 'Wikipedia báo lỗi: '.($data['error']['info'] ?? $code));
+        }
+
+        return $data;
     }
 
     public function search(string $keyword): array
